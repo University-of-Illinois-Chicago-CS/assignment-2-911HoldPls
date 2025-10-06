@@ -1,68 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <script src="utils.js"></script>
+  <meta charset="UTF-8" />
+  <title>Assignment 2 – DEM Terrain</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#333; color:#eee; font-family:system-ui, Arial, sans-serif; }
+    #glcanvas { position:fixed; inset:0; width:100%; height:100%; display:block; }
+    #ui {
+      position: fixed; left: 16px; top: 16px; background: rgba(0,0,0,.55);
+      padding: 12px; border-radius: 12px; backdrop-filter: blur(2px);
+    }
+    #ui label { display:block; font-size:12px; opacity:.9; margin-top:8px; }
+    #ui input[type=range], #ui select { width: 220px; }
+  </style>
+  <script type="module" src="./assignment2.js"></script>
+  <script defer src="./utils.js"></script>
 </head>
-<link rel="shortcut icon" href="#">
-<style>
-    body { 
-        background-color: rgb(150, 150, 150);
-        font-family: Arial, Helvetica, sans-serif;
-    }
-    #glcanvas {
-        position: absolute;
-        left: 0px;
-        top: 0px;
-        width: 100%;
-        height: 100%;
-        overflow: auto;
-        background-color: white;
-    }
-    #config {
-        position: absolute;
-        left: 5px;
-        top: 5px;
-        text-align: center;
-        background-color: #001d62bd;
-        color: white;
-        border-style: solid;
-        border-color: black;
-        border-width: 2px;
-    }
-</style>
 <body>
-    <script src="assignment2.js" type="module"></script>
-
-    <canvas id="glcanvas"></canvas>
-    <div id="config">
-        <table>
-            <tr>
-                <td>Y Rotation</td>
-                <td><input id="rotation" type="range" min="0" max="360" value="0">
-                </td>
-            </tr>
-
-            <tr>
-                <td>Zoom</td>
-                <td><input value="0" id="scale" type="range" min="0" max="200" value="0">
-                </td>
-            </tr>
-
-
-            <tr>
-                <td>height</td>
-                <td><input value="50" id="height" type="range" min="0" max="100" value="0">
-                </td>
-            </tr>
-
-            <tr>
-                <td>Load image</td>
-                <td><input type="file" id="fileInput" onchange="loadImageFile(event)">
-                </td>
-            </tr>
-
-        </table>
+  <canvas id="glcanvas"></canvas>
+  <div id="ui">
+    <div><strong>Controls</strong></div>
+    <label>Y Rotation <input id="rotation" type="range" min="0" max="360" value="0"></label>
+    <label>Zoom <input id="scale" type="range" min="0" max="200" value="60"></label>
+    <label>Height <input id="height" type="range" min="0" max="100" value="50"></label>
+    <label>Projection
+      <select id="projectionSelect">
+        <option value="perspective" selected>Perspective</option>
+        <option value="orthographic">Orthographic</option>
+      </select>
+    </label>
+    <label>Load image <input type="file" id="fileInput"></label>
+    <div style="font-size:12px; opacity:.8; margin-top:8px;">
+      Mouse: Left-drag = rotate (Y/Z), Wheel = zoom, Right-drag (Shift for Z-axis) = pan
     </div>
+  </div>
 </body>
 </html>
