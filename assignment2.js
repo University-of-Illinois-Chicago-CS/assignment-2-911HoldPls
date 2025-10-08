@@ -1,332 +1,251 @@
 import vertexShaderSrc from './vertex.glsl.js';
-import fragmentShaderSrc from './fragment.glsl.js'
+import fragmentShaderSrc from './fragment.glsl.js';
 
-var gl = null;
-var vao = null;
-var program = null;
-var vertexCount = 0;
-var uniformModelViewLoc = null;
-var uniformProjectionLoc = null;
-var heightmapData = null;
+let gl, program, vao = null, vertexCount = 0;
+let uniformModelViewLoc, uniformProjectionLoc;
 
-function processImage(img)
-{
-	// draw the image into an off-screen canvas
-	var off = document.createElement('canvas');
-	
-	var sw = img.width, sh = img.height;
-	off.width = sw; off.height = sh;
-	
-	var ctx = off.getContext('2d');
-	ctx.drawImage(img, 0, 0, sw, sh);
-	
-	// read back the image pixel data
-	var imgd = ctx.getImageData(0,0,sw,sh);
-	var px = imgd.data;
-	
-	// create a an array will hold the height value
-	var heightArray = new Float32Array(sw * sh);
-	
-	// loop through the image, rows then columns
-	for (var y=0;y<sh;y++) 
-	{
-		for (var x=0;x<sw;x++) 
-		{
-			// offset in the image buffer
-			var i = (y*sw + x)*4;
-			
-			// read the RGB pixel value
-			var r = px[i+0], g = px[i+1], b = px[i+2];
-			
-			// convert to greyscale value between 0 and 1
-			var lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255.0;
+// Mouse-driven deltas
+let rotY = 0;      // radians (mouse)
+let rotZ = 0;      // radians (mouse)
+let panX = 0, panY = 0, panZ = 0;  // <-- panY added
 
-			// store in array
-			heightArray[y*sw + x] = lum;
+// ===== UI readers =====
+function uiRotY() {
+  const s = document.getElementById('rotation');
+  return s ? (Number(s.value) * Math.PI / 180) : 0;
+}
+function uiZoom() {
+  const s = document.getElementById('scale');
+  const v = s ? Number(s.value) : 60;
+  return 0.6 + (200 - v) / 100;
+}
+function uiHeightScale() {
+  const s = document.getElementById('height');
+  return s ? Number(s.value) / 50 : 1.0;
+}
+function uiProjMode() {
+  const sel = document.getElementById('projectionSelect');
+  return sel ? sel.value : 'perspective';
+}
+
+// ===== DEM processing (pure canvas) =====
+function processImage(img) {
+  const sw = img.width, sh = img.height;
+  const c = document.createElement('canvas');
+  c.width = sw; c.height = sh;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, sw, sh);
+  const { data } = ctx.getImageData(0, 0, sw, sh);
+
+  const heights = new Float32Array(sw * sh);
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = (y * sw + x) * 4;
+      const lum = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255.0;
+      heights[y * sw + x] = lum;
+    }
+  }
+  return { width: sw, height: sh, data: heights };
+}
+
+// ===== Mesh builder =====
+function buildMesh(hm) {
+  const w = hm.width, h = hm.height, d = hm.data;
+  const triCount = (w - 1) * (h - 1) * 2;
+  const positions = new Float32Array(triCount * 3 * 3);
+
+  const nx = x => (x / (w - 1)) * 2 - 1;
+  const nz = y => (y / (h - 1)) * 2 - 1;
+
+  let p = 0;
+  for (let y = 0; y < h - 1; y++) {
+    for (let x = 0; x < w - 1; x++) {
+      const x0 = nx(x), x1 = nx(x + 1);
+      const z0 = nz(y), z1 = nz(y + 1);
+
+      const y00 = d[y * w + x];
+      const y10 = d[y * w + x + 1];
+      const y01 = d[(y + 1) * w + x];
+      const y11 = d[(y + 1) * w + x + 1];
+
+      // Triangle A
+      positions[p++] = x0; positions[p++] = y00; positions[p++] = z0;
+      positions[p++] = x1; positions[p++] = y10; positions[p++] = z0;
+      positions[p++] = x0; positions[p++] = y01; positions[p++] = z1;
+
+      // Triangle B
+      positions[p++] = x1; positions[p++] = y10; positions[p++] = z0;
+      positions[p++] = x1; positions[p++] = y11; positions[p++] = z1;
+      positions[p++] = x0; positions[p++] = y01; positions[p++] = z1;
+    }
+  }
+  return positions;
+}
+
+function uploadMesh(positions) {
+  const posBuf = createBuffer(gl, gl.ARRAY_BUFFER, positions);
+  const posLoc = gl.getAttribLocation(program, 'position');
+  vao = createVAO(gl, posLoc, posBuf);
+  vertexCount = positions.length / 3;
+}
+
+// ===== File input =====
+function hookFile() {
+  const input = document.getElementById('fileInput');
+  if (!input) return;
+  input.addEventListener('change', (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const hm = processImage(img);
+        const mesh = buildMesh(hm);
+        uploadMesh(mesh);
+
+        // Centered, clean default view on import
+        rotY = 0; rotZ = 0; panX = 0; panY = 0; panZ = 0; // <-- reset panY too
+        const r = document.getElementById('rotation'); if (r) r.value = '0';
+        const sc = document.getElementById('scale');   if (sc) sc.value = '80'; // closer default
+        const h = document.getElementById('height');   if (h) h.value = '50';
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(f);
+  });
+}
+
+// ===== Mouse interactions =====
+function hookMouse(canvas) {
+  let isLeft = false, isRight = false, lastX = 0, lastY = 0;
+
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) isLeft = true;
+    if (e.button === 2) isRight = true;
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener('mouseup', () => { isLeft = false; isRight = false; });
+  window.addEventListener('mousemove', (e) => {
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    if (isLeft) {
+      rotY += dx * 0.01; 
+      rotZ += dy * 0.01; 
+    } else if (isRight) {
+		if (e.shiftKey) {            
+			panX += dx * 0.003;
+			panY += -dy * 0.003;
+		} else {                     
+			panX += dx * 0.003;
+			panZ += dy * 0.003;
 		}
 	}
+  });
 
-	return {
-		data: heightArray,
-		width: sw,
-		height: sw
-	};
+  canvas.addEventListener('wheel', (e) => {
+	e.preventDefault();
+	const sc = document.getElementById('scale');
+	if (!sc) return;
+
+	const projMode = uiProjMode();
+	const scrollingIn = (e.deltaY < 0);
+	let step = scrollingIn ? 8 : -8;
+	if (projMode === 'orthographic') step = -step;
+
+	const v = Number(sc.value);
+	const nv = Math.max(0, Math.min(200, v + step));
+	sc.value = String(nv);
+	}, { passive: false });
 }
 
-
-window.loadImageFile = function(event)
-{
-
-	var f = event.target.files && event.target.files[0];
-	if (!f) return;
-	
-	// create a FileReader to read the image file
-	var reader = new FileReader();
-	reader.onload = function() 
-	{
-		// create an internal Image object to hold the image into memory
-		var img = new Image();
-		img.onload = function() 
-		{
-			// heightmapData is globally defined
-			heightmapData = processImage(img);
-			
-			/*
-				TODO: using the data in heightmapData, create a triangle mesh
-					heightmapData.data: array holding the actual data, note that 
-					this is a single dimensional array the stores 2D data in row-major order
-
-					heightmapData.width: width of map (number of columns)
-					heightmapData.height: height of the map (number of rows)
-			*/
-			console.log('loaded image: ' + heightmapData.width + ' x ' + heightmapData.height);
-
-		};
-		img.onerror = function() 
-		{
-			console.error("Invalid image file.");
-			alert("The selected file could not be loaded as an image.");
-		};
-
-		// the source of the image is the data load from the file
-		img.src = reader.result;
-	};
-	reader.readAsDataURL(f);
+// ===== Resize for device pixel ratio =====
+function resizeCanvas() {
+  const c = document.getElementById('glcanvas');
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth;
+  const h = c.clientHeight;
+  if (c.width !== w * dpr || c.height !== h * dpr) {
+    c.width = w * dpr;
+    c.height = h * dpr;
+  }
 }
 
+// ===== Draw loop =====
+function draw() {
+  resizeCanvas();
 
-function setupViewMatrix(eye, target)
-{
-    var forward = normalize(subtract(target, eye));
-    var upHint  = [0, 1, 0];
+  const canvas = gl.canvas;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.15, 0.15, 0.16, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
 
-    var right = normalize(cross(forward, upHint));
-    var up    = cross(right, forward);
+  const aspect = canvas.width / canvas.height;
+  const projMode = uiProjMode();
+  const zoom = uiZoom();
+  const hS = uiHeightScale();
+  const sliderRotY = uiRotY();
 
-    var view = lookAt(eye, target, up);
-    return view;
+  let projection;
+  if (projMode === 'orthographic') {
+    const base = 1.2;
+    const scale = base * (1 / zoom);
+    const left = -scale * aspect, right = scale * aspect, bottom = -scale, top = scale;
+    projection = orthographicMatrix(left, right, bottom, top, 0.01, 50.0);
+  } else {
+    projection = perspectiveMatrix(70 * Math.PI / 180, aspect, 0.01, 50.0);
+  }
 
-}
-function draw()
-{
+  // Camera
+  const eye = (projMode === 'perspective')
+    ? [0, 1.2, 2.8 * zoom] 
+    : [0, 1.2, 3.0];
 
-	var fovRadians = 70 * Math.PI / 180;
-	var aspectRatio = +gl.canvas.width / +gl.canvas.height;
-	var nearClip = 0.001;
-	var farClip = 20.0;
+  const lift = (projMode === 'perspective') ? 1.20 : 0.90;
+  const view = lookAt(eye, [0, lift, 0], [0, 1, 0]);
 
-	// perspective projection
-	var projectionMatrix = perspectiveMatrix(
-		fovRadians,
-		aspectRatio,
-		nearClip,
-		farClip,
-	);
+  const model = multiplyArrayOfMatrices([
+    translateMatrix(panX, (lift - 0.5 * hS) + panY, panZ),
+    rotateYMatrix(sliderRotY + rotY),
+    rotateZMatrix(rotZ),
+    scaleMatrix(1, hS, 1)
+  ]);
 
-	// eye and target
-	var eye = [0, 5, 5];
-	var target = [0, 0, 0];
+  const modelview = multiplyMatrices(view, model);
 
-	var modelMatrix = identityMatrix();
+  gl.useProgram(program);
+  gl.uniformMatrix4fv(uniformProjectionLoc, false, new Float32Array(projection));
+  gl.uniformMatrix4fv(uniformModelViewLoc, false, new Float32Array(modelview));
 
-	// TODO: set up transformations to the model
+  if (vao && vertexCount > 0) {
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
+  }
 
-	// setup viewing matrix
-	var eyeToTarget = subtract(target, eye);
-	var viewMatrix = setupViewMatrix(eye, target);
-
-	// model-view Matrix = view * model
-	var modelviewMatrix = multiplyMatrices(viewMatrix, modelMatrix);
-
-
-	// enable depth testing
-	gl.enable(gl.DEPTH_TEST);
-
-	// disable face culling to render both sides of the triangles
-	gl.disable(gl.CULL_FACE);
-
-	gl.clearColor(0.2, 0.2, 0.2, 1);
-	gl.clear(gl.COLOR_BUFFER_BIT);
-
-	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-	gl.useProgram(program);
-	
-	// update modelview and projection matrices to GPU as uniforms
-	gl.uniformMatrix4fv(uniformModelViewLoc, false, new Float32Array(modelviewMatrix));
-	gl.uniformMatrix4fv(uniformProjectionLoc, false, new Float32Array(projectionMatrix));
-
-	gl.bindVertexArray(vao);
-	
-	var primitiveType = gl.TRIANGLES;
-	gl.drawArrays(primitiveType, 0, vertexCount);
-
-	requestAnimationFrame(draw);
-
+  requestAnimationFrame(draw);
 }
 
-function createBox()
-{
-	function transformTriangle(triangle, matrix) {
-		var v1 = [triangle[0], triangle[1], triangle[2], 1];
-		var v2 = [triangle[3], triangle[4], triangle[5], 1];
-		var v3 = [triangle[6], triangle[7], triangle[8], 1];
+// ===== Init =====
+function initialize() {
+  const canvas = document.getElementById('glcanvas');
+  gl = canvas.getContext('webgl2');
+  if (!gl) {
+    alert('WebGL2 not supported');
+    return;
+  }
 
-		var newV1 = multiplyMatrixVector(matrix, v1);
-		var newV2 = multiplyMatrixVector(matrix, v2);
-		var newV3 = multiplyMatrixVector(matrix, v3);
+  const vs = createShader(gl, gl.VERTEX_SHADER, vertexShaderSrc);
+  const fs = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSrc);
+  program = createProgram(gl, vs, fs);
 
-		return [
-			newV1[0], newV1[1], newV1[2],
-			newV2[0], newV2[1], newV2[2],
-			newV3[0], newV3[1], newV3[2]
-		];
-	}
+  uniformModelViewLoc = gl.getUniformLocation(program, 'modelview');
+  uniformProjectionLoc = gl.getUniformLocation(program, 'projection');
 
-	var box = [];
-
-	var triangle1 = [
-		-1, -1, +1,
-		-1, +1, +1,
-		+1, -1, +1,
-	];
-	box.push(...triangle1)
-
-	var triangle2 = [
-		+1, -1, +1,
-		-1, +1, +1,
-		+1, +1, +1
-	];
-	box.push(...triangle2);
-
-	// 3 rotations of the above face
-	for (var i=1; i<=3; i++) 
-	{
-		var yAngle = i* (90 * Math.PI / 180);
-		var yRotMat = rotateYMatrix(yAngle);
-
-		var newT1 = transformTriangle(triangle1, yRotMat);
-		var newT2 = transformTriangle(triangle2, yRotMat);
-
-		box.push(...newT1);
-		box.push(...newT2);
-	}
-
-	// a rotation to provide the base of the box
-	var xRotMat = rotateXMatrix(90 * Math.PI / 180);
-	box.push(...transformTriangle(triangle1, xRotMat));
-	box.push(...transformTriangle(triangle2, xRotMat));
-
-
-	return {
-		positions: box
-	};
-
+  hookFile();
+  hookMouse(canvas);
+  requestAnimationFrame(draw);
 }
 
-var isDragging = false;
-var startX, startY;
-var leftMouse = false;
-
-function addMouseCallback(canvas)
-{
-	isDragging = false;
-
-	canvas.addEventListener("mousedown", function (e) 
-	{
-		if (e.button === 0) {
-			console.log("Left button pressed");
-			leftMouse = true;
-		} else if (e.button === 2) {
-			console.log("Right button pressed");
-			leftMouse = false;
-		}
-
-		isDragging = true;
-		startX = e.offsetX;
-		startY = e.offsetY;
-	});
-
-	canvas.addEventListener("contextmenu", function(e)  {
-		e.preventDefault(); // disables the default right-click menu
-	});
-
-
-	canvas.addEventListener("wheel", function(e)  {
-		e.preventDefault(); // prevents page scroll
-
-		if (e.deltaY < 0) 
-		{
-			console.log("Scrolled up");
-			// e.g., zoom in
-		} else {
-			console.log("Scrolled down");
-			// e.g., zoom out
-		}
-	});
-
-	document.addEventListener("mousemove", function (e) {
-		if (!isDragging) return;
-		var currentX = e.offsetX;
-		var currentY = e.offsetY;
-
-		var deltaX = currentX - startX;
-		var deltaY = currentY - startY;
-		console.log('mouse drag by: ' + deltaX + ', ' + deltaY);
-
-		// implement dragging logic
-	});
-
-	document.addEventListener("mouseup", function () {
-		isDragging = false;
-	});
-
-	document.addEventListener("mouseleave", () => {
-		isDragging = false;
-	});
-}
-
-function initialize() 
-{
-	var canvas = document.querySelector("#glcanvas");
-	canvas.width = canvas.clientWidth;
-	canvas.height = canvas.clientHeight;
-
-	gl = canvas.getContext("webgl2");
-
-	// add mouse callbacks
-	addMouseCallback(canvas);
-
-	var box = createBox();
-	vertexCount = box.positions.length / 3;		// vertexCount is global variable used by draw()
-	console.log(box);
-
-	// create buffers to put in box
-	var boxVertices = new Float32Array(box['positions']);
-	var posBuffer = createBuffer(gl, gl.ARRAY_BUFFER, boxVertices);
-
-	var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSrc);
-	var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSrc);
-	program = createProgram(gl, vertexShader, fragmentShader);
-
-	// attributes (per vertex)
-	var posAttribLoc = gl.getAttribLocation(program, "position");
-
-	// uniforms
-	uniformModelViewLoc = gl.getUniformLocation(program, 'modelview');
-	uniformProjectionLoc = gl.getUniformLocation(program, 'projection');
-
-	vao = createVAO(gl, 
-		// positions
-		posAttribLoc, posBuffer, 
-
-		// normals (unused in this assignments)
-		null, null, 
-
-		// colors (not needed--computed by shader)
-		null, null
-	);
-
-	window.requestAnimationFrame(draw);
-}
-
-window.onload = initialize();
+window.addEventListener('load', initialize);
