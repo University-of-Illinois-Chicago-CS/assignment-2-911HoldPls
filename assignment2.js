@@ -9,7 +9,7 @@ let rotY = 0;      // radians (mouse)
 let rotZ = 0;      // radians (mouse)
 let panX = 0, panY = 0, panZ = 0;  // <-- panY added
 
-// ===== UI readers (no event dependence; read every frame) =====
+// ===== UI readers =====
 function uiRotY() {
   const s = document.getElementById('rotation');
   return s ? (Number(s.value) * Math.PI / 180) : 0;
@@ -48,7 +48,7 @@ function processImage(img) {
   return { width: sw, height: sh, data: heights };
 }
 
-// ===== Mesh builder (two triangles per cell) =====
+// ===== Mesh builder =====
 function buildMesh(hm) {
   const w = hm.width, h = hm.height, d = hm.data;
   const triCount = (w - 1) * (h - 1) * 2;
@@ -116,7 +116,7 @@ function hookFile() {
   });
 }
 
-// ===== Mouse interactions (no libs) =====
+// ===== Mouse interactions =====
 function hookMouse(canvas) {
   let isLeft = false, isRight = false, lastX = 0, lastY = 0;
 
@@ -198,7 +198,7 @@ function draw() {
     projection = perspectiveMatrix(70 * Math.PI / 180, aspect, 0.01, 50.0);
   }
 
-  // Camera (lowered Y so it doesn't "look down" too steeply)
+  // Camera
   const eye = (projMode === 'perspective')
     ? [0, 1.2, 2.8 * zoom] 
     : [0, 1.2, 3.0];
